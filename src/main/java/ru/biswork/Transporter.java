@@ -24,6 +24,7 @@ public class Transporter implements Runnable{
     private final static boolean AUTO_COMMIT_MODE = false;
     private ArrayList<String> record=new ArrayList();
 
+
    /* public Transporter(Log log, Connection remCon, Connection locCon) {
         this.log = log;
         this.remCon = remCon;
@@ -57,55 +58,61 @@ public class Transporter implements Runnable{
         boolean stop = false;
         int rowCount = 0;
         long startTime;
+        int readRsCount=0;
         // while (!log.stop && !stop){
         logger.info("Начало переноса данных из локального хранилища в удалённое...");
         //System.out.println("Начало переноса данных из локального хранилища в удалённое...");//Вычитование
         String res = "0";
         //
-        //String readSQL = "select p1.device,p1.datetime,substr(p1.datetime,1,2)||substr(p1.datetime,4,2)||substr(p1.datetime,7,4) as day from ping p1 where  substr(p1.datetime,1,2)||substr(p1.datetime,4,2)||substr(p1.datetime,7,4)=  (select  substr(p2.datetime,1,2)||substr(p2.datetime,4,2)||substr(p2.datetime,7,4)  from ping p2 limit 1)";
-        String readSQL ="Select device,datetime from ping";
-        String deleteSQL = "delete from ping";
+        String readSQL = "select p1.device,p1.datetime,substr(p1.datetime,1,2)||substr(p1.datetime,4,2)||substr(p1.datetime,7,4) as day from ping p1 where  substr(p1.datetime,1,2)||substr(p1.datetime,4,2)||substr(p1.datetime,7,4)=  (select  substr(p2.datetime,1,2)||substr(p2.datetime,4,2)||substr(p2.datetime,7,4)  from ping p2 limit 1)";
+        //String readSQL ="Select device,datetime from ping";
+        String deleteSQL = "delete from ping  where substr(datetime,1,2)||substr(datetime,4,2)||substr(datetime,7,4)=";
         final String ADD_DATA_SQL = "insert into ping(ID,DEVICE, DATETIME, DIRECT,insert_datetime) values (PING_SEQ.nextval,?,?,?,CURRENT_TIMESTAMP)";
 
         Statement readST = null;
         Statement deleteST = null;
         CallableStatement writeST = null;
 
+
         StringBuilder device = new StringBuilder();
         StringBuilder datetime = new StringBuilder();
-        //StringBuilder day = new StringBuilder();
+        StringBuilder day = new StringBuilder();
 
         SimpleDateFormat dateFormat = Log.getSimpleDateFormat();
         java.util.Date date;
         try {
-            writeST = remCon.prepareCall(ADD_DATA_SQL);
             remCon.setAutoCommit(AUTO_COMMIT_MODE);
+            locCon.setAutoCommit(AUTO_COMMIT_MODE);
         } catch (SQLException e1) {
             e1.printStackTrace();
         }
-        //while (true) {//TODO Подумать как остановиться
+
+        startTime = System.nanoTime();
+        while (true) {//TODO Подумать как остановиться
+            readRsCount=0;
             try {
+                writeST = remCon.prepareCall(ADD_DATA_SQL);
                 readST = locCon.createStatement();
                 deleteST = locCon.createStatement();
-                //Thread.sleep(5000);
+                Thread.sleep(5000);
 
             } catch (SQLException e) {
                 e.printStackTrace();
+            } catch (InterruptedException e) {
+                e.printStackTrace();
             }
-            startTime = System.nanoTime();
             //Заполняем входные параметры
             try {
                 readST.setFetchSize(bulkSize*3);
                 ResultSet rs = readST.executeQuery(readSQL);
-
                 while (rs.next()) {
                     device.delete(0, Integer.MAX_VALUE);
                     datetime.delete(0, Integer.MAX_VALUE);
-                    //day.delete(0, Integer.MAX_VALUE);
+                    day.delete(0, Integer.MAX_VALUE);
 
                     device.append(rs.getString(rs.findColumn("device")));
                     datetime.append(rs.getString(rs.findColumn("datetime")));
-                    //day.append(rs.getString(3));
+                    day.append(rs.getString(3));
                     //Перенос записи
 
                     Long timestamp = System.currentTimeMillis();
@@ -120,7 +127,9 @@ public class Transporter implements Runnable{
                         batchSize = bulkSize;
                     }
                     rowCount += 1;
+                    readRsCount+=1;
                 }
+                if (readRsCount==0) break;
                 //Передача не полной пачки
                 writeST.executeBatch();
                 res = "0";
@@ -140,21 +149,21 @@ public class Transporter implements Runnable{
                     readST.close();//В любом случае пытаемся закрыть statement
                     writeST.close();
                     log.remoteDBwasUnavailable = false;
-                    remCon.close();
-                    if (rowCount > 0)logger.info("Успешно перенесено записей:" + rowCount);
                 } catch (SQLException e) {
                     e.printStackTrace();
                 }
             }
-            logger.info("Вставка данных в удалённое хранилище завершена");
+
             if (res.equals("0")) {
-                logger.info("Перенос данных из локальной базы в удаленную прошёл успешно!!!");
-                logger.info("Время переноса: " + String.format("%,12d", System.nanoTime() - startTime) + " ns");
+                logger.info(String.format("Перенос данных из локальной базы в удалённую за %s прошёл успешно",day.toString()));
+                logger.info("Прошло ввермени с начала переноса: " + String.format("%,12d", System.nanoTime() - startTime) + " ns");
                 try {
-                   // if (day.length() > 0) {
-                        deleteST.executeUpdate(deleteSQL);
-                        logger.info("Удаление данных из резервной таблицы завершено.");
-                    //}
+                    if (day.length() > 0) {
+                        logger.info(String.format("Выражение на удаление: %s",deleteSQL+day.toString()));
+                        deleteST.executeUpdate(String.format("%s'%s'",deleteSQL,day.toString()));
+                        logger.info(String.format("Удаление записей в локальной базе за %s прошло успешно",day.toString()));
+                        locCon.commit();
+                    }
                 } catch (SQLException e) {
                     e.printStackTrace();
                     try {
@@ -163,7 +172,16 @@ public class Transporter implements Runnable{
                         e1.printStackTrace();
                     }
                 }
-        //    }
+           }
+        }
+        //Когда перенесены все записи
+        logger.info("Вставка данных в удалённое хранилище завершена");
+        logger.info("Время переноса: " + String.format("%,12d", System.nanoTime() - startTime) + " ns");
+        try{
+            remCon.close();
+            if (rowCount > 0)logger.info("Успешно перенесено записей:" + rowCount);
+        } catch (SQLException e) {
+            e.printStackTrace();
         }
     }
 }

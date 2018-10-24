@@ -12,7 +12,7 @@ import java.sql.SQLException;
 public class Main {
 
     public static void main(String[] args) throws InterruptedException, UnknownHostException {
-        Log log=new Log(10,1);
+        Log log=new Log(10,1);//TODO Исключить логи из GIT
         try {
             log.startLog();
         } catch (UnknownHostException e) {
